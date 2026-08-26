@@ -1,0 +1,21 @@
+# Radius-based city config (specs.md §2).
+# Extend by appending city entries or widening `parameters` — no code change.
+
+# Pollutants to fetch. Widening this and re-running backfill pulls only the
+# newly-added sensors (existing per-sensor files are skipped as complete).
+parameters:
+  - pm25
+
+# A location whose most recent reading is older than this is treated as dead
+# and skipped during discovery. Many CPCB stations went silent years ago.
+stale_after_days: 120
+
+cities:
+  - name: delhi
+    latitude: 28.6139
+    longitude: 77.2090
+    radius_meters: 25000
+  - name: mumbai
+    latitude: 19.0760
+    longitude: 72.8777
+    radius_meters: 25000
