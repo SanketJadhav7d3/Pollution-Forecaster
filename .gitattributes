@@ -1,0 +1,5 @@
+# Normalise to LF in the repo. Mixed endings produced whole-file diffs for
+# one-line edits, and CRLF breaks shell scripts inside Linux containers.
+* text=auto eol=lf
+*.png binary
+*.parquet binary
