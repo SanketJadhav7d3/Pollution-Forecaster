@@ -34,13 +34,28 @@ DATA_PATH = ROOT / "data" / "processed" / "city_daily.parquet"
 EXPERIMENT = "aqi-next-day-baseline"
 TEST_FRACTION = 0.2
 
-FEATURES = [
+# Required: a row without these is dropped, since the pollutant history is the
+# irreducible core of the forecast.
+CORE_FEATURES = [
     "pm25",  # today's completed 24h mean - available when forecasting tomorrow
     "pm25_lag_1", "pm25_lag_2", "pm25_lag_3",
     "pm25_roll_3", "pm25_roll_7", "pm25_roll_7_std",
     "pm25_delta_1", "pm25_delta_3", "pm25_vs_roll_7",
     "n_sensors", "month", "day_of_week", "day_of_year", "is_stubble_season",
 ]
+
+# Optional: meteorology only starts 2025-04, and requiring it would discard the
+# first eight months of pollutant history. sklearn >=1.4 routes NaN down a
+# learned default branch, so these stay usable where present and simply carry no
+# information where absent.
+WEATHER_FEATURES = [
+    "temperature", "temperature_lag_1", "temperature_roll_3", "temperature_delta_1",
+    "humidity", "humidity_lag_1", "humidity_roll_3", "humidity_delta_1",
+    "wind_speed", "wind_speed_lag_1", "wind_speed_roll_3", "wind_speed_delta_1",
+    "wind_speed_roll_3_min", "wind_dir_sin", "wind_dir_cos",
+]
+
+FEATURES = CORE_FEATURES + WEATHER_FEATURES
 TARGET = "target_aqi_category"
 
 
@@ -48,7 +63,9 @@ def load_dataset(path: Path | str) -> tuple[pd.DataFrame, dict]:
     """Load and drop rows without a target or a full feature warm-up."""
     path = Path(path)
     df = pd.read_parquet(path)
-    usable = df.dropna(subset=[TARGET, *FEATURES]).copy()
+    # Only the core is required; weather NaNs are handled by the model.
+    present = [c for c in CORE_FEATURES if c in df.columns]
+    usable = df.dropna(subset=[TARGET, *present]).copy()
     snapshot = {
         "data_snapshot": str(path),
         "data_rows": len(usable),
@@ -74,7 +91,7 @@ def chronological_split(df: pd.DataFrame, test_fraction: float = TEST_FRACTION):
 
 def encode(df: pd.DataFrame) -> pd.DataFrame:
     """Trees handle ordinal codes fine; no one-hot needed (§5)."""
-    x = df[FEATURES].copy()
+    x = df[[c for c in FEATURES if c in df.columns]].copy()
     if "city" in df:
         x["city_code"] = df["city"].astype("category").cat.codes
     return x

@@ -118,8 +118,9 @@ def test_pooling_averages_sensors_and_counts_them():
         {
             "city": ["delhi"] * 3,
             "sensor_id": [1, 2, 1],
+            "parameter": ["pm25"] * 3,
             "date": pd.to_datetime(["2025-01-01", "2025-01-01", "2025-01-02"]),
-            "pm25": [10.0, 30.0, 50.0],
+            "value": [10.0, 30.0, 50.0],
         }
     )
     out = pool_to_city_day(rows).sort_values("date")

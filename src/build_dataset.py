@@ -19,6 +19,7 @@ import json
 import logging
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 from src.aqi import pm25_to_category
@@ -33,12 +34,18 @@ STUBBLE_BURNING_MONTHS = (10, 11)  # Oct-Nov paddy burning drives Delhi's worst 
 
 
 def load_sensor_rows() -> pd.DataFrame:
-    """All sensor-day rows, with `city` taken from the directory layout (§2)."""
+    """All sensor-day rows, with `city` from the directory layout (§2).
+
+    `parameter` is carried explicitly: the raw directory now holds meteorology
+    alongside pm25, and reading `value` without it would silently average
+    temperature into the pollutant series.
+    """
     records = []
     for city_dir in sorted(p for p in RAW_DIR.iterdir() if p.is_dir()):
         city = city_dir.name
         for path in sorted(city_dir.glob("sensor_*.json")):
             payload = json.loads(path.read_text(encoding="utf-8"))
+            parameter = payload.get("parameter")
             for row in payload["rows"]:
                 if row.get("value") is None:
                     continue
@@ -46,8 +53,9 @@ def load_sensor_rows() -> pd.DataFrame:
                     {
                         "city": city,
                         "sensor_id": payload["sensor_id"],
+                        "parameter": parameter,
                         "date": row["date"],
-                        "pm25": row["value"],
+                        "value": row["value"],
                     }
                 )
     if not records:
@@ -57,19 +65,47 @@ def load_sensor_rows() -> pd.DataFrame:
     return df
 
 
+# Wind direction is circular: averaging 350 and 10 degrees naively gives 180,
+# the exact opposite of the truth. It is resolved into unit vectors instead and
+# the components are averaged, which is also the form a tree can actually use.
+CIRCULAR = "wind_direction"
+
+
 def pool_to_city_day(sensor_rows: pd.DataFrame) -> pd.DataFrame:
-    """Average sensors within a city-day.
+    """Average sensors within a city-day, one column per parameter.
 
     Individual sensors are retired and re-registered under new ids, so no single
     sensor spans the window; the city-day mean is the stable unit. `n_sensors`
-    is kept because that count changes over time (Mumbai: ~1 -> dozens), and a
-    level shift caused by sampling must stay distinguishable from a real trend.
+    counts pm25 sensors specifically, because that count runs 2 -> 60 over the
+    window and a level shift caused by sampling must stay distinguishable from
+    a real trend.
     """
-    return (
-        sensor_rows.groupby(["city", "date"])
-        .agg(pm25=("pm25", "mean"), n_sensors=("sensor_id", "nunique"))
+    linear = sensor_rows[sensor_rows["parameter"] != CIRCULAR]
+    wide = (
+        linear.pivot_table(
+            index=["city", "date"], columns="parameter", values="value", aggfunc="mean"
+        )
+        .rename(columns={"relativehumidity": "humidity"})
         .reset_index()
     )
+    wide.columns.name = None
+
+    circ = sensor_rows[sensor_rows["parameter"] == CIRCULAR]
+    if not circ.empty:
+        rad = np.deg2rad(circ["value"])
+        comp = circ.assign(_sin=np.sin(rad), _cos=np.cos(rad))
+        agg = comp.groupby(["city", "date"])[["_sin", "_cos"]].mean().reset_index()
+        agg = agg.rename(columns={"_sin": "wind_dir_sin", "_cos": "wind_dir_cos"})
+        wide = wide.merge(agg, on=["city", "date"], how="left")
+
+    counts = (
+        sensor_rows[sensor_rows["parameter"] == "pm25"]
+        .groupby(["city", "date"])["sensor_id"]
+        .nunique()
+        .rename("n_sensors")
+        .reset_index()
+    )
+    return wide.merge(counts, on=["city", "date"], how="left")
 
 
 def reindex_continuous(city_day: pd.DataFrame) -> pd.DataFrame:
@@ -108,6 +144,18 @@ def add_features(df: pd.DataFrame) -> pd.DataFrame:
         g["pm25_delta_1"] = pm - pm.shift(1)
         g["pm25_delta_3"] = pm - pm.shift(3)
         g["pm25_vs_roll_7"] = pm - g["pm25_roll_7"]
+
+        # Meteorology as of today - available when forecasting tomorrow. No NWP
+        # forecast is used, so these describe conditions now, not conditions
+        # during the day being predicted; expect a modest gain, not a step change.
+        for col in ("temperature", "humidity", "wind_speed"):
+            if col in g:
+                g[f"{col}_lag_1"] = g[col].shift(1)
+                g[f"{col}_roll_3"] = g[col].rolling(3, min_periods=2).mean()
+                g[f"{col}_delta_1"] = g[col] - g[col].shift(1)
+        if "wind_speed" in g:
+            # Low wind after a calm spell is when pollutants accumulate.
+            g["wind_speed_roll_3_min"] = g["wind_speed"].rolling(3, min_periods=2).min()
 
         d = g["date"].dt
         g["month"] = d.month
