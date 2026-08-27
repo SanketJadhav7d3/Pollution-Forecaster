@@ -31,6 +31,7 @@ from pydantic import BaseModel, Field, field_validator
 from src.aqi import BAD_AIR_RANK, CATEGORIES, RANK, pm25_to_category
 from src.features import CORE_FEATURES, build_x
 from src.features_live import MIN_HISTORY_DAYS, HistoryError, build_feature_row
+from src.history_store import HistoryUnavailable, get_history
 
 log = logging.getLogger("serve")
 
@@ -81,6 +82,8 @@ class PredictResponse(BaseModel):
     bad_air_warning: bool
     latest_pm25: float
     model_version: str
+    data_age_days: int = 0
+    published_at: str | None = None
 
 
 @lru_cache(maxsize=1)
@@ -136,7 +139,8 @@ def _coerce_to_signature(frame: pd.DataFrame, model) -> pd.DataFrame:
     return out[[s.name for s in schema.inputs]]
 
 
-def _predict_from_history(city: str, history: list[dict]) -> PredictResponse:
+def _predict_from_history(city: str, history: list[dict],
+                          published_at: str | None = None) -> PredictResponse:
     try:
         row, forecast_date = build_feature_row(city, history)
     except HistoryError as exc:
@@ -175,6 +179,10 @@ def _predict_from_history(city: str, history: list[dict]) -> PredictResponse:
         bad_air_warning=RANK.get(predicted, 0) >= BAD_AIR_RANK,
         latest_pm25=round(latest, 1),
         model_version=model_version(),
+        # OpenAQ's daily aggregates lag a day or two, so the forecast can land
+        # on a day already past. Say so rather than implying it is always t+1.
+        data_age_days=(datetime.now(UTC).date() - (forecast_date - timedelta(days=1))).days,
+        published_at=published_at,
     )
 
 
@@ -186,11 +194,12 @@ def predict(req: PredictRequest) -> PredictResponse:
 
 
 @app.get("/predict/{city}", response_model=PredictResponse)
-def predict_live(city: str, days: int = 10) -> PredictResponse:
-    """Fetch recent readings from OpenAQ, then forecast.
+def predict_stored(city: str) -> PredictResponse:
+    """Forecast from the history published by the scheduled job.
 
-    Convenience only. It adds a network dependency and an API key to the request
-    path, so the stateless POST above stays the one used by scheduled jobs.
+    Reads a single small object rather than querying OpenAQ per sensor: that
+    query takes longer than a request is allowed to live, so the pooling happens
+    once a day on write instead of on every read.
     """
     city = city.strip().lower()
     if city not in KNOWN_CITIES:
@@ -198,13 +207,11 @@ def predict_live(city: str, days: int = 10) -> PredictResponse:
             status_code=422,
             detail=f"unknown city '{city}'; expected one of {', '.join(KNOWN_CITIES)}",
         )
-    from src.live_history import LiveHistoryError, fetch_recent_history
-
     try:
-        history = fetch_recent_history(city, days=days)
-    except LiveHistoryError as exc:
+        payload = get_history(city)
+    except HistoryUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
-    return _predict_from_history(city, history)
+    return _predict_from_history(city, payload["history"], published_at=payload.get("published_at"))
 
 
 @app.get("/health")
@@ -220,6 +227,7 @@ def health() -> dict:
         "model_version": model_version(),
         "cities": list(KNOWN_CITIES),
         "min_history_days": MIN_HISTORY_DAYS,
+        "history_source": os.getenv("PROCESSED_BUCKET") or "not configured",
         "time": datetime.now(UTC).isoformat(),
     }
 
