@@ -22,6 +22,28 @@ COPY src/ ./src/
 COPY config/ ./config/
 RUN uv sync --frozen --no-dev --no-editable
 
+# xgboost pulls ~290MB of CUDA libraries for distributed GPU training, and
+# mlflow pulls sklearn/matplotlib for its own tooling. None of it is reachable
+# from the inference path, and all of it is paid for on every cold start.
+# The smoke test after build is what proves the model still loads.
+ENV SITE=/app/.venv/lib/python3.12/site-packages
+RUN rm -rf \
+      "$SITE/nvidia" \
+      "$SITE"/nvidia_* \
+      "$SITE/matplotlib" \
+      "$SITE"/matplotlib.* \
+      "$SITE/mpl_toolkits" \
+      "$SITE/fontTools" \
+      "$SITE/sklearn" \
+      "$SITE"/scikit_learn* \
+      "$SITE/pyarrow/tests" \
+      "$SITE/xgboost/lib/libxgboost.so.bak" \
+ && find /app/.venv -name "__pycache__" -type d -prune -exec rm -rf {} + \
+ && find /app/.venv -name "*.pyc" -delete \
+ && find /app/.venv -name "tests" -maxdepth 4 -type d -prune -exec rm -rf {} + \
+ && /app/.venv/bin/python -c "import mlflow.pyfunc, xgboost, pandas" \
+ && echo "strip verified: inference imports still resolve"
+
 
 FROM python:3.12-slim AS runtime
 
@@ -34,11 +56,14 @@ WORKDIR /app
 COPY --from=builder --chown=appuser:appuser /app/.venv /app/.venv
 COPY --from=builder --chown=appuser:appuser /app/src /app/src
 COPY --from=builder --chown=appuser:appuser /app/config /app/config
+# The model is baked in, so the image tag and the model version stay pinned
+# together. Produce it first with: uv run python -m src.export_model
+COPY --chown=appuser:appuser model_artifact/ /app/model_artifact/
 
 ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    MLFLOW_TRACKING_URI=file:///app/mlruns
+    MODEL_URI=/app/model_artifact
 
 USER appuser
 

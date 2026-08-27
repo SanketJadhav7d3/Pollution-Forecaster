@@ -13,3 +13,5 @@ __pycache__/
 .env
 README.md
 specs.md
+
+# model_artifact/ is deliberately NOT ignored: it is baked into the image

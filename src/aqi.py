@@ -22,6 +22,16 @@ PM25_BREAKPOINTS: list[tuple[float, str]] = [
 
 CATEGORIES: list[str] = [label for _, label in PM25_BREAKPOINTS]
 
+# Severity ordering. Lives here rather than with the metrics because it is a
+# property of the CPCB scale, and the inference path needs it without pulling
+# scikit-learn in behind it.
+RANK: dict[str, int] = {label: i for i, label in enumerate(CATEGORIES)}
+
+# "Poor" or worse: where public health advice changes.
+# "Very Poor" or worse: the emergency band.
+BAD_AIR_RANK = RANK["Poor"]
+SEVERE_RANK = RANK["Very Poor"]
+
 
 def pm25_to_category(values: pd.Series) -> pd.Series:
     """Map 24h-mean PM2.5 (ug/m3) to its CPCB category.

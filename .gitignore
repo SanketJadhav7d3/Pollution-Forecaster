@@ -18,3 +18,4 @@ mlartifacts/
 .pytest_cache/
 .ruff_cache/
 mlflow.db
+model_artifact/

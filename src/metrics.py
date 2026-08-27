@@ -13,14 +13,9 @@ import numpy as np
 import pandas as pd
 from sklearn.metrics import accuracy_score, f1_score
 
-from src.aqi import CATEGORIES
+from src.aqi import BAD_AIR_RANK, CATEGORIES, RANK, SEVERE_RANK
 
-RANK = {c: i for i, c in enumerate(CATEGORIES)}
-
-# "Poor" or worse: the point at which health advice changes for the general
-# public. "Very Poor" or worse is the emergency band.
-BAD_AIR_RANK = RANK["Poor"]
-SEVERE_RANK = RANK["Very Poor"]
+__all__ = ["BAD_AIR_RANK", "RANK", "SEVERE_RANK", "score_all", "summarise_folds"]
 
 
 def _warning_scores(y_true: pd.Series, y_pred: pd.Series, threshold: int, tag: str) -> dict:

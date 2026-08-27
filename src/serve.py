@@ -16,26 +16,30 @@ other would hide that trade from whoever consumes this.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 from datetime import UTC, date, datetime, timedelta
 from functools import lru_cache
+from pathlib import Path
 
 import mlflow
 import pandas as pd
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field, field_validator
 
-from src.aqi import CATEGORIES, pm25_to_category
-from src.experiments import build_x
+from src.aqi import BAD_AIR_RANK, CATEGORIES, RANK, pm25_to_category
+from src.features import CORE_FEATURES, build_x
 from src.features_live import MIN_HISTORY_DAYS, HistoryError, build_feature_row
-from src.metrics import BAD_AIR_RANK, RANK
-from src.register_model import MODEL_NAME
-from src.train import CORE_FEATURES
 
 log = logging.getLogger("serve")
 
-MODEL_URI = os.getenv("MODEL_URI", f"models:/{MODEL_NAME}/2")
+# A baked artifact directory wins when present (that is how the container
+# ships); otherwise fall back to the local registry for development.
+_BAKED = Path(__file__).resolve().parent.parent / "model_artifact"
+MODEL_URI = os.getenv("MODEL_URI") or (
+    str(_BAKED) if _BAKED.exists() else "models:/aqi-next-day-forecaster/2"
+)
 KNOWN_CITIES = ("delhi", "mumbai")
 # The city feature was ordinal-encoded from a sorted category list at training
 # time; serving must reproduce that mapping exactly, not re-derive it from
@@ -77,6 +81,23 @@ class PredictResponse(BaseModel):
     bad_air_warning: bool
     latest_pm25: float
     model_version: str
+
+
+@lru_cache(maxsize=1)
+def model_version() -> str:
+    """The registered version this artifact came from.
+
+    A baked directory has no version in its path, so the exporter records it
+    alongside the model; reporting the directory name instead would tell a
+    caller nothing about which model answered them.
+    """
+    info = Path(MODEL_URI) / "export_info.json"
+    if info.exists():
+        try:
+            return str(json.loads(info.read_text())["model_version"])
+        except (OSError, ValueError, KeyError):
+            pass
+    return MODEL_URI.rsplit("/", 1)[-1]
 
 
 @lru_cache(maxsize=1)
@@ -153,7 +174,7 @@ def _predict_from_history(city: str, history: list[dict]) -> PredictResponse:
         agrees_with_persistence=predicted == persistence,
         bad_air_warning=RANK.get(predicted, 0) >= BAD_AIR_RANK,
         latest_pm25=round(latest, 1),
-        model_version=MODEL_URI.rsplit("/", 1)[-1],
+        model_version=model_version(),
     )
 
 
@@ -196,6 +217,7 @@ def health() -> dict:
     return {
         "status": "ok",
         "model_uri": MODEL_URI,
+        "model_version": model_version(),
         "cities": list(KNOWN_CITIES),
         "min_history_days": MIN_HISTORY_DAYS,
         "time": datetime.now(UTC).isoformat(),

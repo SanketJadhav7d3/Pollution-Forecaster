@@ -21,8 +21,9 @@ from sklearn.preprocessing import LabelEncoder
 
 from src.aqi import pm25_to_category
 from src.backtest import FOLD_MONTHS, MIN_TRAIN_MONTHS, make_folds
+from src.features import CORE_FEATURES, WEATHER_FEATURES, build_x
 from src.metrics import score_all, summarise_folds
-from src.train import CORE_FEATURES, DATA_PATH, TARGET, WEATHER_FEATURES, load_dataset
+from src.train import DATA_PATH, TARGET, load_dataset
 
 warnings.filterwarnings("ignore")
 log = logging.getLogger("experiments")
@@ -57,11 +58,6 @@ def model_registry() -> dict:
             random_state=42, verbosity=0,
         ),
     }
-
-
-def build_x(frame: pd.DataFrame, features: list[str]) -> pd.DataFrame:
-    cols = [c for c in features if c in frame.columns]
-    return frame[cols].assign(city_code=frame["city"].astype("category").cat.codes)
 
 
 def fit_predict(name: str, factory, train: pd.DataFrame, test: pd.DataFrame,

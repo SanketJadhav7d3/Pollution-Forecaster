@@ -321,6 +321,7 @@ version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
     { name = "fastapi" },
+    { name = "mlflow" },
     { name = "numpy" },
     { name = "pandas" },
     { name = "pyarrow" },
@@ -328,6 +329,7 @@ dependencies = [
     { name = "pyyaml" },
     { name = "requests" },
     { name = "uvicorn", extra = ["standard"] },
+    { name = "xgboost" },
 ]
 
 [package.dev-dependencies]
@@ -345,6 +347,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "fastapi", specifier = ">=0.141.1" },
+    { name = "mlflow", specifier = ">=3.15.2" },
     { name = "numpy", specifier = ">=2.5.2" },
     { name = "pandas", specifier = ">=2.2,<3" },
     { name = "pyarrow", specifier = ">=25.0.1" },
@@ -352,6 +355,7 @@ requires-dist = [
     { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "requests", specifier = ">=2.34.2" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.52.4" },
+    { name = "xgboost", specifier = ">=3.4.1" },
 ]
 
 [package.metadata.requires-dev]
