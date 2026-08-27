@@ -38,6 +38,27 @@ CHOSEN_FEATURES = "core"
 HOLDOUT_FRACTION = 0.2
 
 
+class AQIForecaster(mlflow.pyfunc.PythonModel):
+    """Wraps the booster so it speaks AQI categories, not label indices.
+
+    xgboost trains on integer classes, and the encoder that produced them sorts
+    alphabetically - so class 3 is "Satisfactory", not the third CPCB band. A
+    bare booster therefore returns integers whose meaning lives outside the
+    artifact, which is how a caller ends up confidently mislabelling output.
+    Carrying the class list inside the model makes the artifact self-describing.
+    """
+
+    def __init__(self, model=None, classes: list[str] | None = None):
+        self.model = model
+        self.classes = list(classes or [])
+
+    def predict(self, context, model_input, params=None) -> pd.DataFrame:
+        proba = self.model.predict_proba(model_input)
+        out = pd.DataFrame(proba, columns=self.classes, index=model_input.index)
+        out.insert(0, "predicted_category", [self.classes[i] for i in proba.argmax(axis=1)])
+        return out
+
+
 def run(data_path=DATA_PATH, register: bool = True) -> str:
     df, snapshot = load_dataset(data_path)
     df = df[df["pm25_next_day"].notna()].sort_values("date").copy()
@@ -81,12 +102,13 @@ def run(data_path=DATA_PATH, register: bool = True) -> str:
             {"classes": encoder.classes_.tolist(), "features": list(x_all.columns)},
             "model_contract.json",
         )
-        signature = infer_signature(x_all, encoder.inverse_transform(final.predict(x_all)))
-        # The native xgboost flavor, not mlflow.sklearn: the sklearn flavor
-        # serialises via skops, which refuses xgboost's Booster as an untrusted
-        # type. This also keeps the artifact loadable without sklearn present.
-        info = mlflow.xgboost.log_model(
-            final, name="model", signature=signature,
+        wrapped = AQIForecaster(final, list(encoder.classes_))
+        sample = wrapped.predict(None, x_all.head(3))
+        signature = infer_signature(x_all.head(3), sample)
+        info = mlflow.pyfunc.log_model(
+            name="model",
+            python_model=wrapped,
+            signature=signature,
             input_example=x_all.head(3),
             registered_model_name=MODEL_NAME if register else None,
         )
